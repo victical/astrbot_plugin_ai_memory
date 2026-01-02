@@ -41,39 +41,10 @@ class MemoryManager:
     async def save_memories(self):
         """保存记忆到文件"""
         try:
-            # 清理过期记忆
-            self._clean_expired_memories()
-            
             with open(self.data_file, "w", encoding='utf-8') as f:
                 json.dump(self.memories, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存记忆数据失败: {e}")
-    
-    def _clean_expired_memories(self):
-        """清理过期的记忆"""
-        if not self.config.get("memory_expire_days", 0):
-            return
-        
-        expire_days = self.config["memory_expire_days"]
-        current_time = datetime.datetime.now()
-        
-        for session_id in list(self.memories.keys()):
-            memories = self.memories[session_id]
-            # 过滤掉过期的记忆
-            valid_memories = []
-            for memory in memories:
-                try:
-                    memory_time = datetime.datetime.strptime(memory["timestamp"], "%Y-%m-%d %H:%M:%S")
-                    if (current_time - memory_time).days < expire_days:
-                        valid_memories.append(memory)
-                except:
-                    # 如果时间格式错误，保留记忆
-                    valid_memories.append(memory)
-            
-            if valid_memories:
-                self.memories[session_id] = valid_memories
-            else:
-                del self.memories[session_id]
     
     def add_memory(self, session_id: str, content: str, importance: int = 1) -> bool:
         """添加记忆"""

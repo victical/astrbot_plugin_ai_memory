@@ -1,5 +1,5 @@
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register    
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.event.filter import command, command_group
 from astrbot.api import llm_tool
 import os
@@ -10,25 +10,26 @@ from .config_manager import ConfigManager
 
 logger = logging.getLogger("astrbot")
 
-@register("ai_memory", "kjqwdw", "一个AI记忆管理插件", "1.0.0")
+@register("ai_memory", "kjqwdw、victical", "一个AI记忆管理插件", "1.0.5")
 class Main(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
-        self.PLUGIN_NAME = "strbot_plugin_play_sy"
+        self.PLUGIN_NAME = "ai_memory"
         
-        # 使用data目录下的数据文件，而非插件自身目录
-        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data")
+        # 使用规范的插件数据目录
+        plugin_data_dir = StarTools.get_data_dir()
         # 确保目录存在
-        os.makedirs(os.path.join(data_dir, "memories"), exist_ok=True)
-        self.data_file = os.path.join(data_dir, "memories", "memory_data.json")
+        os.makedirs(plugin_data_dir, exist_ok=True)
+        self.data_file = os.path.join(plugin_data_dir, "memory_data.json")
         
         # 初始化配置管理器
         default_config = {
             "max_memories": config.get("max_memories", 10),
             "auto_save_enabled": config.get("auto_save_enabled", True),
             "importance_threshold": config.get("importance_threshold", 3),
-            "memory_expire_days": config.get("memory_expire_days", 30),
-            "enable_memory_management": config.get("enable_memory_management", True)
+            "enable_memory_management": config.get("enable_memory_management", True),
+            "enable_global_memory": config.get("enable_global_memory", False),
+            "allowed_groups": config.get("allowed_groups", "")
         }
         self.config_manager = ConfigManager(default_config)
         
@@ -38,7 +39,10 @@ class Main(Star):
         logger.info("AI记忆管理插件初始化完成")
 
     def _get_session_id(self, event: AstrMessageEvent) -> str:
-        """获取统一的会话ID"""
+        """获取统一的会话ID，全局模式下返回固定ID (仅限群聊)"""
+        is_group = bool(event.get_group_id())
+        if is_group and self.config_manager.get_config().get("enable_global_memory", False):
+            return "global"
         if hasattr(event, 'unified_msg_origin'):
             return event.unified_msg_origin
         return str(event.session_id)
@@ -50,14 +54,48 @@ class Main(Star):
 
     @memory.command("list")
     async def list_memories(self, event: AstrMessageEvent):
-        """列出所有记忆"""
+        """列出记忆。私聊下列出私聊记忆，群聊下根据全局开关列出群聊/全局记忆"""
+        is_admin = event.role == "admin"
+        group_id = event.get_group_id()
+        is_private = not group_id
+        is_global_mode = self.config_manager.get_config().get("enable_global_memory", False)
+
+        # 管理员私聊模式：显示所有或全局
+        if is_admin and is_private:
+            all_memories = self.memory_manager.memories
+            if not all_memories:
+                return event.plain_result("📂 记忆数据库目前为空。")
+            
+            # 为了符合“私聊下使用memory list默认列出当前的私聊记忆”
+            session_id = self._get_session_id(event)
+            memories = self.memory_manager.get_memories_sorted(session_id)
+            if memories:
+                memory_text = "📝 当前私聊记忆:\n"
+                for i, memory in enumerate(memories):
+                    importance_stars = "⭐" * memory["importance"]
+                    memory_text += f"{i+1}. {memory['content']}\n"
+                    memory_text += f"   重要程度: {importance_stars} ({memory['importance']}/5)\n"
+                    memory_text += f"   时间: {memory['timestamp']}\n\n"
+                return event.plain_result(memory_text)
+            else:
+                return event.plain_result("当前私聊没有保存的记忆。可以使用 /memory list_all 查看所有记忆 (管理员)。")
+
+        # 检查群组限制 (仅针对群聊)
+        if group_id:
+            allowed_groups_str = self.config_manager.get_config().get("allowed_groups", "")
+            if allowed_groups_str.strip():
+                allowed_groups = [g.strip() for g in allowed_groups_str.split(",") if g.strip()]
+                if group_id not in allowed_groups:
+                    return event.plain_result("🚫 该功能仅限在指定的群组中使用。")
+
         session_id = self._get_session_id(event)
         memories = self.memory_manager.get_memories_sorted(session_id)
         
         if not memories:
             return event.plain_result("当前会话没有保存的记忆。")
         
-        memory_text = "📝 已保存的记忆:\n"
+        prefix = "🌐 全局记忆" if (group_id and is_global_mode) else "📝 当前会话记忆"
+        memory_text = f"{prefix}:\n"
         for i, memory in enumerate(memories):
             importance_stars = "⭐" * memory["importance"]
             memory_text += f"{i+1}. {memory['content']}\n"
@@ -65,6 +103,62 @@ class Main(Star):
             memory_text += f"   时间: {memory['timestamp']}\n\n"
         
         return event.plain_result(memory_text)
+
+    @memory.command("list_all")
+    async def list_all_memories(self, event: AstrMessageEvent):
+        """(管理员) 列出数据库中所有的记忆"""
+        if event.role != "admin":
+            return event.plain_result("🚫 仅管理员可使用此指令。")
+        
+        all_memories = self.memory_manager.memories
+        if not all_memories:
+            return event.plain_result("📂 记忆数据库目前为空。")
+
+        memory_text = "📋 全部会话记忆详单 (管理员模式):\n\n"
+        for session_id, memories in all_memories.items():
+            memory_text += f"📍 会话: {session_id}\n"
+            sorted_memories = sorted(memories, key=lambda x: x["importance"], reverse=True)
+            for i, memory in enumerate(sorted_memories):
+                importance_stars = "⭐" * memory["importance"]
+                memory_text += f"  {i+1}. {memory['content']}\n"
+                memory_text += f"     重要程度: {importance_stars}\n"
+            memory_text += "\n"
+        return event.plain_result(memory_text)
+
+    @memory.command("list_group")
+    async def list_group_memories(self, event: AstrMessageEvent, target_group_id: str = None):
+        """查询群聊记忆"""
+        is_global = self.config_manager.get_config().get("enable_global_memory", False)
+        group_id = event.get_group_id()
+        
+        if target_group_id:
+            target_id = target_group_id
+            name = f"👥 群组 {target_group_id}"
+        elif is_global:
+            # 全局模式开启，群聊记忆即为 global 桶
+            target_id = "global"
+            name = "🌐 全局群聊"
+        elif group_id:
+            # 全局模式关闭，在群聊中则查看当前群
+            target_id = group_id
+            name = f"👥 群组 {group_id}"
+        else:
+            # 全局模式关闭，且在私聊中
+            return event.plain_result("💡 全局记忆模式未开启。请指定群号或在群聊中使用。用法: /memory list_group [群号]")
+
+        memories = self.memory_manager.get_memories_sorted(target_id)
+        if not memories:
+            return event.plain_result(f"📂 {name} 目前没有保存的记忆。")
+        
+        memory_text = f"📝 {name} 的记忆:\n"
+        for i, memory in enumerate(memories):
+            importance_stars = "⭐" * memory["importance"]
+            memory_text += f"{i+1}. {memory['content']}\n"
+            memory_text += f"   重要程度: {importance_stars} ({memory['importance']}/5)\n"
+            memory_text += f"   时间: {memory['timestamp']}\n\n"
+        
+        return event.plain_result(memory_text)
+
 
     @memory.command("search")
     async def search_memories(self, event: AstrMessageEvent, keyword: str):
@@ -106,41 +200,43 @@ class Main(Star):
         return event.plain_result(stats_text)
 
     @memory.command("add")
-    async def add_memory(self, event: AstrMessageEvent, content: str, importance: int = 3):
-        """手动添加一条记忆"""
+    async def add_memory(self, event: AstrMessageEvent, content: str):
+        """手动添加一条记忆。用法: /memory add <内容>"""
         session_id = self._get_session_id(event)
         
-        if not content.strip():
+        content = str(content).strip()
+        if not content:
             return event.plain_result("❌ 记忆内容不能为空。")
         
-        if importance < 1 or importance > 5:
-            return event.plain_result("❌ 重要性必须在1-5之间。")
+        importance = 3 # 手动添加默认设为3
         
-        if self.memory_manager.add_memory(session_id, content.strip(), importance):
+        if self.memory_manager.add_memory(session_id, content, importance):
             await self.memory_manager.save_memories()
             importance_stars = "⭐" * importance
-            return event.plain_result(f"✅ 已添加记忆: {content}\n重要程度: {importance_stars} ({importance}/5)")
+            return event.plain_result(f"✅ 已添加记忆: {content}\n重要程度: {importance_stars} ({importance}/5)\n💡 提示: 可使用 /memory update 指令修改重要性。")
         else:
             return event.plain_result("❌ 记忆管理功能已禁用，无法添加记忆。")
 
     @memory.command("edit")
     async def edit_memory(self, event: AstrMessageEvent, index: int, content: str):
-        """编辑指定序号的记忆内容"""
+        """编辑指定序号的记忆内容。用法: /memory edit <序号> <新内容>"""
         session_id = self._get_session_id(event)
         index = index - 1  # 用户输入1-based，转换为0-based
-        
-        if not content.strip():
-            return event.plain_result("❌ 记忆内容不能为空。")
         
         memories = self.memory_manager.get_memories(session_id)
         if index < 0 or index >= len(memories):
             return event.plain_result("❌ 无效的记忆序号。")
+
+        content = str(content).strip()
+        if not content:
+            return event.plain_result("❌ 记忆内容不能为空。")
         
         old_content = memories[index]["content"]
-        memories[index]["content"] = content.strip()
+        memories[index]["content"] = content
+            
         await self.memory_manager.save_memories()
         
-        return event.plain_result(f"✅ 已编辑记忆:\n原内容: {old_content}\n新内容: {content}")
+        return event.plain_result(f"✅ 已编辑记忆 {index + 1}:\n原内容: {old_content}\n新内容: {content}\n💡 提示: 可使用 /memory update 指令修改重要性。")
 
     @memory.command("clear")
     async def clear_memories(self, event: AstrMessageEvent):
@@ -185,7 +281,7 @@ class Main(Star):
 
     @command("memory_reset_config")
     async def reset_config(self, event: AstrMessageEvent):
-        """重置配置为默认值"""
+        """resets current config to default."""
         self.config_manager.reset_to_default()
         # 更新记忆管理器的配置
         self.memory_manager.config = self.config_manager.get_config()
@@ -199,50 +295,27 @@ class Main(Star):
 📋 记忆管理指令：
 
 🔍 查看记忆：
-   /memory list - 列出所有已保存的记忆
+   /memory list - 列出当前会话的记忆(私聊独立，群聊受全局配置影响)
+   /memory list_group - [群聊] 强制列出当前群聊的特定记忆
    /memory search <关键词> - 搜索包含关键词的记忆
    /memory stats - 显示记忆统计信息
 
 ✏️ 添加/编辑记忆：
-   /memory add <内容> [重要性] - 手动添加记忆(重要性默认3，范围1-5)
-   示例: /memory add 我喜欢吃苹果 4
-   示例: /memory add 明天要开会
-   
-   /memory edit <序号> <新内容> - 编辑指定序号的记忆内容
-   示例: /memory edit 1 我喜欢吃红苹果
+   /memory add <内容> - 手动添加记忆(默认3级重要性)
+   /memory edit <序号> <新内容> - 编辑记忆内容
+   /memory update <序号> <重要性> - 修改记忆重要性(1-5)
 
 🗑️ 删除记忆：
    /memory remove <序号> - 删除指定序号的记忆
-   示例: /memory remove 1
-   
    /memory clear - 清空当前会话的所有记忆
 
-⚙️ 调整记忆：
-   /memory update <序号> <重要性> - 更新记忆的重要性(1-5)
-   示例: /memory update 1 5
-
-📊 配置管理：
-   /memory_config - 显示当前配置
-   /memory_reset_config - 重置配置为默认值
-
-❓ 帮助信息：
-   /mem_help - 显示此帮助信息
-
 ⚙️ 记忆特性：
-   - 每个会话最多保存记忆数量可在管理面板配置
+   - 全局记忆开关仅对群聊生效，私聊始终是独立的。
    - 记忆按重要程度(1-5)排序，⭐表示重要性
-   - 记忆数量超限时会自动删除最不重要的记忆
-   - AI会自动保存它认为重要的信息
-   - AI在对话时会参考历史记忆
-   - 支持记忆过期自动清理
-   - 支持记忆重要性手动调整
+   - AI会自动保存重要的信息并参考历史记忆
 
 💡 使用建议：
-   - 使用 /memory add 手动添加重要信息
-   - 定期使用 /memory stats 查看记忆使用情况
-   - 使用 /memory search 快速找到相关记忆
-   - 通过 /memory update 调整记忆重要性
-   - 定期清理不重要的记忆
+   - 使用 /memory add 添加后，通过 /memory update 灵活调整权重。
         """
         
         return event.plain_result(help_text)
@@ -336,42 +409,6 @@ class Main(Star):
             stats_text += f"\n重要性分布: {', '.join(importance_text)}"
         
         return stats_text
-
-    @llm_tool(name="clear_old_memories")
-    async def clear_old_memories(self, event: AstrMessageEvent, days: int = 30) -> str:
-        """清理指定天数之前的记忆
-        
-        Args:
-            days(number): 清理多少天之前的记忆，默认30天
-        """
-        session_id = self._get_session_id(event)
-        memories = self.memory_manager.get_memories(session_id)
-        
-        if not memories:
-            return "当前会话没有任何记忆。"
-        
-        import datetime
-        current_time = datetime.datetime.now()
-        cutoff_time = current_time - datetime.timedelta(days=days)
-        
-        old_memories = []
-        for memory in memories:
-            try:
-                memory_time = datetime.datetime.strptime(memory["timestamp"], "%Y-%m-%d %H:%M:%S")
-                if memory_time < cutoff_time:
-                    old_memories.append(memory)
-            except:
-                continue
-        
-        if not old_memories:
-            return f"没有找到 {days} 天之前的记忆。"
-        
-        # 从记忆中移除旧的记忆
-        memories = [m for m in memories if m not in old_memories]
-        self.memory_manager.memories[session_id] = memories
-        await self.memory_manager.save_memories()
-        
-        return f"✅ 已清理 {len(old_memories)} 条 {days} 天之前的记忆。"
 
     async def on_config_update(self, new_config: dict):
         """配置更新时的回调"""

@@ -52,15 +52,6 @@ class ConfigManager:
                 logger.warning(f"无效的importance_threshold值: {threshold}，使用默认值")
                 validated["importance_threshold"] = self.default_config["importance_threshold"]
         
-        # 验证记忆过期天数
-        if "memory_expire_days" in config:
-            expire_days = config["memory_expire_days"]
-            if isinstance(expire_days, int) and 0 <= expire_days <= 365:
-                validated["memory_expire_days"] = expire_days
-            else:
-                logger.warning(f"无效的memory_expire_days值: {expire_days}，使用默认值")
-                validated["memory_expire_days"] = self.default_config["memory_expire_days"]
-        
         # 验证记忆管理开关
         if "enable_memory_management" in config:
             enable = config["enable_memory_management"]
@@ -69,6 +60,14 @@ class ConfigManager:
             else:
                 logger.warning(f"无效的enable_memory_management值: {enable}，使用默认值")
                 validated["enable_memory_management"] = self.default_config["enable_memory_management"]
+        
+        # 验证允许群组
+        if "allowed_groups" in config:
+            allowed = config["allowed_groups"]
+            if isinstance(allowed, str):
+                validated["allowed_groups"] = allowed
+            else:
+                validated["allowed_groups"] = self.default_config.get("allowed_groups", "")
         
         return validated
     
@@ -93,6 +92,5 @@ class ConfigManager:
         summary += f"• 最大记忆数: {config.get('max_memories', 10)}\n"
         summary += f"• 自动保存: {'启用' if config.get('auto_save_enabled', True) else '禁用'}\n"
         summary += f"• 重要性阈值: {config.get('importance_threshold', 3)}/5\n"
-        summary += f"• 过期天数: {config.get('memory_expire_days', 30)}天\n"
         summary += f"• 记忆管理: {'启用' if config.get('enable_memory_management', True) else '禁用'}"
         return summary 
