@@ -60,6 +60,14 @@ class ConfigManager:
             else:
                 logger.warning(f"无效的enable_memory_management值: {enable}，使用默认值")
                 validated["enable_memory_management"] = self.default_config["enable_memory_management"]
+
+        # 验证自动注入开关
+        if "enable_auto_injection" in config:
+            enable_inj = config["enable_auto_injection"]
+            if isinstance(enable_inj, bool):
+                validated["enable_auto_injection"] = enable_inj
+            else:
+                validated["enable_auto_injection"] = self.default_config.get("enable_auto_injection", True)
         
         # 验证允许群组
         if "allowed_groups" in config:

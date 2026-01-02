@@ -1,16 +1,19 @@
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register, StarTools
-from astrbot.api.event.filter import command, command_group
+from astrbot.api.event import filter
+from astrbot.api.event.filter import command, command_group, event_message_type
+from astrbot.api.provider import ProviderRequest
 from astrbot.api import llm_tool
 import os
 import logging
+import json
 
 from .memory_manager import MemoryManager
 from .config_manager import ConfigManager
 
 logger = logging.getLogger("astrbot")
 
-@register("ai_memory", "kjqwdw、victical", "一个AI记忆管理插件", "1.0.5")
+@register("ai_memory", "kjqwdw、victical", "一个AI记忆管理插件", "1.1.0")
 class Main(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -29,7 +32,8 @@ class Main(Star):
             "importance_threshold": config.get("importance_threshold", 3),
             "enable_memory_management": config.get("enable_memory_management", True),
             "enable_global_memory": config.get("enable_global_memory", False),
-            "allowed_groups": config.get("allowed_groups", "")
+            "allowed_groups": config.get("allowed_groups", ""),
+            "enable_auto_injection": config.get("enable_auto_injection", True)
         }
         self.config_manager = ConfigManager(default_config)
         
@@ -46,6 +50,41 @@ class Main(Star):
         if hasattr(event, 'unified_msg_origin'):
             return event.unified_msg_origin
         return str(event.session_id)
+
+    @filter.on_llm_request()
+    async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
+        """收到 LLM 请求时，自动检索并注入记忆"""
+        if not self.config_manager.get_config().get("enable_auto_injection", True):
+            return
+            
+        session_id = self._get_session_id(event)
+        # 获取最相关的记忆 (Top 3)
+        # 这里简单使用关键词检索，如果需要更高级可以提取 query 中的名词
+        query = event.message_str
+        
+        # 1. 尝试关键词搜索 (如果有明显的关键词)
+        memories = []
+        if query:
+            # 简单的分词/关键词提取（这里暂用全文检索相关的记忆）
+            # 实际上 get_memories_sorted 已经按重要性排好序了
+            all_sorted = self.memory_manager.get_memories_sorted(session_id)
+            
+            # 过滤逻辑：包含 query 中的部分关键词或者直接取最重要的
+            # 为了简洁和防臃肿，我们直接取当前会话最重要的 3 条作为“背景知识”注入
+            # AI 会根据这些背景决定是否在回复中使用
+            memories = all_sorted[:3]
+            
+        if memories:
+            memory_context = "\n".join([f"- {m['content']}" for m in memories])
+            injection = f"\n\n[历史记忆背景]\n以下是你关于当前会话的一些重要记忆，请在回复时参考：\n{memory_context}\n"
+            
+            # 注入到 system_prompt
+            if req.system_prompt:
+                req.system_prompt += injection
+            else:
+                req.system_prompt = injection
+            
+            logger.debug(f"已为会话 {session_id} 注入 {len(memories)} 条记忆背景")
 
     @command_group("memory")
     def memory(self):
