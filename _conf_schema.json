@@ -1,46 +1,82 @@
 {
+    "enable_memory_management": {
+        "type": "bool",
+        "default": true,
+        "description": "【基础】是否启用记忆管理功能"
+    },
     "max_memories": {
-        "description": "每个会话最大记忆数量",
+        "description": "【基础】每个会话最大记忆数量",
         "type": "int",
         "hint": "超出数量时会删除最不重要的记忆",
         "default": 10,
         "min": 1,
-        "max": 100
+        "max": 300
+    },
+    "enable_global_memory": {
+        "type": "bool",
+        "default": false,
+        "description": "【基础】是否启用全局群聊记忆",
+        "hint": "仅对群聊生效。开启后所有群聊共享记忆，私聊保持独立。"
+    },
+    "allowed_groups": {
+        "type": "string",
+        "default": "",
+        "description": "【基础】允许使用指令的群组ID",
+        "hint": "多个群组ID请用逗号分隔。留空表示允许所有会话。"
     },
     "auto_save_enabled": {
-        "description": "是否启用自动保存记忆",
+        "description": "【自动保存】是否启用自动保存",
         "type": "bool",
         "hint": "AI会自动保存重要的对话内容",
         "default": true
     },
     "importance_threshold": {
-        "description": "自动保存的重要性阈值",
+        "description": "【自动保存】重要性阈值",
         "type": "int",
         "hint": "只有重要性大于等于此值的记忆才会被自动保存",
         "default": 3,
         "min": 1,
         "max": 5
     },
-    "enable_memory_management": {
-        "type": "bool",
-        "default": true,
-        "description": "是否启用记忆管理功能"
-    },
-    "enable_global_memory": {
-        "type": "bool",
-        "default": false,
-        "description": "是否启用全局记忆模式（仅对群聊生效，开启后所有群聊共享记忆，私聊保持独立）"
-    },
     "enable_auto_injection": {
         "type": "bool",
         "default": true,
-        "description": "是否启用记忆自动注入",
+        "description": "【检索注入】是否启用记忆自动注入",
         "hint": "开启后，AI在回复前会自动参考当前会话最重要的记忆"
     },
-    "allowed_groups": {
+    "injection_title": {
         "type": "string",
+        "default": "核心背景事实",
+        "description": "【检索注入】注入区域标题",
+        "hint": "显示在 Prompt 注入区域顶部的标题文字。"
+    },
+    "injection_instruction": {
+        "type": "string",
+        "default": "注意：以下是你记录的与当前话题相关的真实记忆。请参考时间戳判断时效性，并优先比对记录中的 QQ 号以区分你本人的真实设定与他人的言论或误导：",
+        "description": "【检索注入】注入引导指令词",
+        "hint": "用于指挥 AI 如何使用这些记忆。你可以设置其语气（温和或强制）。"
+    },
+    "rerank_provider_id": {
+        "description": "【精选 Rerank】记忆精选大模型",
+        "type": "string",
+        "_special": "select_provider",
         "default": "",
-        "description": "允许使用记忆列出指令的群组ID",
-        "hint": "多个群组ID请用逗号分隔。留空表示允许所有会话。"
+        "hint": "选择一个大模型来精选最相关的记忆。留空则使用纯算法匹配。"
+    },
+    "recall_top_k": {
+        "description": "【精选 Rerank】初筛候选数量",
+        "type": "int",
+        "default": 10,
+        "min": 1,
+        "max": 30,
+        "hint": "算法海选出的候选记忆数量。建议 5-15。"
+    },
+    "inject_top_k": {
+        "description": "【精选 Rerank】最终注入数量",
+        "type": "int",
+        "default": 3,
+        "min": 1,
+        "max": 10,
+        "hint": "经过精选后最终塞进对话里的记忆上限。建议 1-5。"
     }
-} 
+}

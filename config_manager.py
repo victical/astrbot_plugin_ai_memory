@@ -28,7 +28,7 @@ class ConfigManager:
         # 验证最大记忆数
         if "max_memories" in config:
             max_memories = config["max_memories"]
-            if isinstance(max_memories, int) and 1 <= max_memories <= 100:
+            if isinstance(max_memories, int) and 1 <= max_memories <= 300:
                 validated["max_memories"] = max_memories
             else:
                 logger.warning(f"无效的max_memories值: {max_memories}，使用默认值")

@@ -39,20 +39,40 @@ class MemoryManager:
             self.memories = {}
     
     async def save_memories(self):
-        """保存记忆到文件"""
+        """保存记忆到文件 (原子化写入，防止损坏)"""
         try:
-            with open(self.data_file, "w", encoding='utf-8') as f:
+            temp_file = self.data_file + ".tmp"
+            with open(temp_file, "w", encoding='utf-8') as f:
                 json.dump(self.memories, f, ensure_ascii=False, indent=2)
+            
+            # 写入成功后重命名覆盖，确保原子性
+            if os.path.exists(self.data_file):
+                os.replace(temp_file, self.data_file)
+            else:
+                os.rename(temp_file, self.data_file)
+                
         except Exception as e:
             logger.error(f"保存记忆数据失败: {e}")
+            if os.path.exists(self.data_file + ".tmp"):
+                try: os.remove(self.data_file + ".tmp")
+                except: pass
     
     def add_memory(self, session_id: str, content: str, importance: int = 1) -> bool:
-        """添加记忆"""
+        """添加记忆 (包含简单去重逻辑)"""
         if not self.config.get("enable_memory_management", True):
             return False
         
         if session_id not in self.memories:
             self.memories[session_id] = []
+        
+        content = content.strip()
+        
+        # 极简去重：如果内容完全一致或包含关系，则更新而非新增
+        for existing in self.memories[session_id]:
+            if content == existing['content'] or (len(content) > 10 and content in existing['content']):
+                existing['timestamp'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                existing['importance'] = max(existing['importance'], min(max(importance, 1), 5))
+                return True
         
         max_memories = self.config.get("max_memories", 10)
         
